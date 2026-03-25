@@ -105,11 +105,23 @@ def render_sidebar() -> dict:
     """Render sidebar controls and return configuration dict."""
     st.sidebar.title("⚙️ Settings")
 
-    model_path = st.sidebar.text_input(
+    # Default to a relative path; resolve it against the project root so it
+    # works regardless of the working directory the app was launched from.
+    _default_model_rel = os.path.join("models", "best_hybrid_model.keras")
+    model_path_input = st.sidebar.text_input(
         "Model path",
-        value=os.path.join(ROOT, "models", "best_hybrid_model.keras"),
-        help="Absolute or relative path to a trained .keras / .h5 model file.",
+        value=_default_model_rel,
+        help=(
+            "Relative (to project root) or absolute path to a trained "
+            ".keras / .h5 model file."
+        ),
     )
+    # Resolve relative paths against the project root so users can type short
+    # portable paths without knowing their system's absolute location.
+    if not os.path.isabs(model_path_input):
+        model_path = os.path.join(ROOT, model_path_input)
+    else:
+        model_path = model_path_input
     model_type = st.sidebar.selectbox(
         "Model type",
         options=["hybrid", "cnn"],
@@ -139,7 +151,9 @@ def render_sidebar() -> dict:
 
     st.sidebar.markdown("---")
     st.sidebar.markdown(
-        "**Note:** Train a model first with `train.py` before using this app."
+        "**ℹ️ First time?**  "
+        "Train a model with `train.py` and then point the *Model path* field "
+        "above to the saved `.keras` file."
     )
 
     return {
@@ -176,8 +190,15 @@ def main() -> None:
                 st.error(f"Failed to load model: {exc}")
     else:
         st.warning(
-            f"Model not found at `{cfg['model_path']}`.  "
-            "Please train a model first or adjust the path in the sidebar."
+            f"⚠️ **Model not found** at `{cfg['model_path']}`.\n\n"
+            "**To get started:**\n"
+            "1. Prepare your dataset — place images in `dataset/real/` and `dataset/fake/`\n"
+            "2. Train the model from your project directory:\n"
+            "   ```\n"
+            "   python train.py --dataset_dir dataset --model_type hybrid --epochs 20\n"
+            "   ```\n"
+            "3. The trained model is saved to `models/best_hybrid_model.keras` "
+            "(or update the **Model path** in the sidebar to point to an existing `.keras` / `.h5` file)."
         )
 
     # ── Image upload ─────────────────────────
