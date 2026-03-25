@@ -1,4 +1,4 @@
-# Fake Image Detection (Deepfake Detection)
+# Deepfake Image Detection
 
 A **production-quality** machine learning system that detects whether an image is **Real** or **Fake** using a hybrid spatial + frequency-domain approach, explainable AI (Grad-CAM), and EXIF metadata analysis — served through a clean Streamlit web interface.
 
@@ -25,9 +25,9 @@ A **production-quality** machine learning system that detects whether an image i
 ```
 deepfake-image-detection/
 ├── dataset/
-│   ├── real/          ← real images
+│   ├── real/          ← real images (JPG / PNG / BMP / WEBP)
 │   └── fake/          ← fake / AI-generated images
-├── models/            ← saved model checkpoints & plots
+├── models/            ← saved model checkpoints & plots (created after training)
 ├── utils/
 │   ├── __init__.py
 │   ├── data_loader.py ← dataset loading, FFT features, augmentation
@@ -42,6 +42,140 @@ deepfake-image-detection/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.8 or later
+- A dataset of real and fake images (see [Prepare the Dataset](#2-prepare-the-dataset) below)
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Prepare the Dataset
+
+Place your images in the following structure (relative to the project root):
+
+```
+dataset/
+  real/   ← authentic images (JPG / PNG / BMP / WEBP)
+  fake/   ← AI-generated or manipulated images
+```
+
+> **Note:** Both sub-folders must contain at least a few images before training will succeed.
+
+### 3. Train the Model
+
+Run `train.py` from the **project root directory**:
+
+```bash
+# Hybrid model (CNN + FFT) — recommended
+python train.py --dataset_dir dataset --model_type hybrid --epochs 20
+
+# CNN-only model (faster, slightly less accurate)
+python train.py --dataset_dir dataset --model_type cnn --epochs 20
+```
+
+Training options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--dataset_dir` | `dataset` | Root dataset directory |
+| `--model_type` | `hybrid` | `hybrid` or `cnn` |
+| `--image_size` | `128` | Resize to N×N pixels |
+| `--epochs` | `20` | Max training epochs |
+| `--batch_size` | `32` | Batch size |
+| `--output_dir` | `models` | Where to save model & plots |
+| `--no_augment` | — | Disable data augmentation |
+
+After training, the following artefacts appear in `models/`:
+
+| File | Description |
+|---|---|
+| `best_hybrid_model.keras` | Best checkpoint (lowest validation loss) |
+| `hybrid_model_final.keras` | Model state after the last epoch |
+| `training_history.png` | Accuracy & loss curves |
+| `confusion_matrix.png` | Confusion matrix on the validation set |
+
+### 4. Launch the Web App
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Navigate to `http://localhost:8501` in your browser.
+
+> **Important:** Run this command from the **project root directory** so that the default model path (`models/best_hybrid_model.keras`) resolves correctly.  
+> If you saved the model to a different location, update the **Model path** field in the app sidebar.
+
+### 5. Run Predictions from the CLI
+
+**Single image:**
+```bash
+python predict.py \
+  --model models/best_hybrid_model.keras \
+  --model_type hybrid \
+  --image path/to/image.jpg
+```
+
+**Batch (entire directory):**
+```bash
+python predict.py \
+  --model models/best_hybrid_model.keras \
+  --input_dir path/to/images/ \
+  --output_dir predictions/
+```
+
+**Using the unified CLI:**
+```bash
+python main.py predict --model models/best_hybrid_model.keras --image test.jpg
+python main.py train --dataset_dir dataset --epochs 20
+```
+
+---
+
+## 🌐 Streamlit Web Interface
+
+| Panel | Description |
+|---|---|
+| **Uploaded Image** | Preview of the input image |
+| **Prediction Result** | Real / Fake label with confidence score |
+| **Grad-CAM** | Three-panel heatmap: original / heatmap / overlay |
+| **EXIF Metadata** | Camera, software, creation date, manipulation score |
+
+Use the sidebar to configure:
+- **Model path** — relative (e.g. `models/best_hybrid_model.keras`) or absolute path to a `.keras` / `.h5` file
+- **Model type** — `hybrid` or `cnn` (must match how the model was trained)
+- **Image size** — resolution the model was trained on (128 or 224)
+- **Decision threshold** — probability above which an image is labelled Fake
+- **Show Grad-CAM / EXIF** toggles
+
+---
+
+## 🛠 Troubleshooting
+
+### "Model not found" warning in the web app
+
+This warning appears when no trained model exists at the configured path.
+
+**Fix:**
+1. Train a model first (see [Step 3](#3-train-the-model) above).
+2. Make sure you launch the app from the **project root** directory so that the default relative path `models/best_hybrid_model.keras` resolves correctly:
+   ```bash
+   # correct — run from the project root
+   streamlit run app/streamlit_app.py
+   ```
+3. If your model is stored elsewhere, enter the correct path in the **Model path** sidebar field (absolute paths are also accepted).
+
+### "ℹ️ First time?" sidebar hint
+
+This hint is a reminder displayed at all times — it is **not** an error. You can ignore it once a model is loaded successfully.
 
 ---
 
@@ -68,99 +202,6 @@ Spatial branch (H×W×3)          FFT branch (H×W×1)
                               Dense(256) → Dropout
                               Dense(1, sigmoid)
 ```
-
----
-
-## 🚀 Quick Start
-
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Prepare the Dataset
-
-Place your images in the expected structure:
-
-```
-dataset/
-  real/   ← real images (JPG / PNG / BMP / WEBP)
-  fake/   ← fake / AI-generated images
-```
-
-### 3. Train the Model
-
-```bash
-# Hybrid model (CNN + FFT) — recommended
-python train.py --dataset_dir dataset --model_type hybrid --epochs 20
-
-# CNN-only model
-python train.py --dataset_dir dataset --model_type cnn --epochs 20
-```
-
-Training options:
-
-| Flag | Default | Description |
-|---|---|---|
-| `--dataset_dir` | `dataset` | Root dataset directory |
-| `--model_type` | `hybrid` | `hybrid` or `cnn` |
-| `--image_size` | `128` | Resize to N×N pixels |
-| `--epochs` | `20` | Max training epochs |
-| `--batch_size` | `32` | Batch size |
-| `--output_dir` | `models` | Where to save model & plots |
-| `--no_augment` | — | Disable data augmentation |
-
-After training, saved artefacts appear in `models/`:
-- `best_hybrid_model.keras` — best checkpoint (lowest val loss)
-- `hybrid_model_final.keras` — model after last epoch
-- `training_history.png` — accuracy & loss curves
-- `confusion_matrix.png` — confusion matrix
-
-### 4. Run Predictions
-
-**Single image:**
-```bash
-python predict.py \
-  --model models/best_hybrid_model.keras \
-  --model_type hybrid \
-  --image path/to/image.jpg
-```
-
-**Batch (entire directory):**
-```bash
-python predict.py \
-  --model models/best_hybrid_model.keras \
-  --input_dir path/to/images/ \
-  --output_dir predictions/
-```
-
-**Using the unified CLI:**
-```bash
-python main.py predict --model models/best_hybrid_model.keras --image test.jpg
-python main.py train --dataset_dir dataset --epochs 20
-```
-
-### 5. Launch the Web App
-
-```bash
-streamlit run app/streamlit_app.py
-```
-
-Navigate to `http://localhost:8501` in your browser.
-
----
-
-## 🌐 Streamlit Web Interface
-
-| Panel | Description |
-|---|---|
-| **Uploaded Image** | Preview of the input image |
-| **Prediction Result** | Real / Fake label with confidence score |
-| **Grad-CAM** | Three-panel heatmap: original / heatmap / overlay |
-| **EXIF Metadata** | Camera, software, creation date, manipulation score |
-
-Use the sidebar to configure the model path, image size, decision threshold, and which panels to display.
 
 ---
 
