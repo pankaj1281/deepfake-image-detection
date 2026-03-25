@@ -28,6 +28,8 @@ deepfake-image-detection/
 │   ├── real/          ← real images (JPG / PNG / BMP / WEBP)
 │   └── fake/          ← fake / AI-generated images
 ├── models/            ← saved model checkpoints & plots (created after training)
+├── scripts/
+│   └── create_sample_dataset.py  ← generate synthetic images for pipeline testing
 ├── utils/
 │   ├── __init__.py
 │   ├── data_loader.py ← dataset loading, FFT features, augmentation
@@ -45,22 +47,78 @@ deepfake-image-detection/
 
 ---
 
-## 🚀 Quick Start
+## 🛠 Installation
 
-### Prerequisites
+### Requirements
 
-- Python 3.8 or later
-- A dataset of real and fake images (see [Prepare the Dataset](#2-prepare-the-dataset) below)
+- **Python 3.8 – 3.11** (TensorFlow 2.x does not yet support Python 3.12)
+- **pip** 22 or later
+- **Git**
+- Optional: an NVIDIA GPU with CUDA 11.x / cuDNN 8.x for faster training
 
-### 1. Install Dependencies
+### Step 1 — Clone the repository
 
 ```bash
+git clone https://github.com/pankaj1281/deepfake-image-detection.git
+cd deepfake-image-detection
+```
+
+### Step 2 — Create a virtual environment (recommended)
+
+Using a virtual environment keeps the project's dependencies isolated.
+
+**Windows (Command Prompt / PowerShell):**
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+> After activation, your prompt will be prefixed with `(.venv)`.  
+> To deactivate later, run `deactivate`.
+
+### Step 3 — Install dependencies
+
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. Prepare the Dataset
+<details>
+<summary>GPU acceleration (optional, NVIDIA only)</summary>
 
-Place your images in the following structure (relative to the project root):
+To use an NVIDIA GPU on Linux or Windows, replace the CPU-only TensorFlow wheel with the GPU build:
+
+```bash
+pip install tensorflow[and-cuda]   # TensorFlow ≥ 2.13 on Linux/Windows
+```
+
+Verify GPU detection:
+```python
+python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+```
+
+> **macOS (Apple Silicon):** Use `tensorflow-metal` instead:
+> ```bash
+> pip install tensorflow-metal
+> ```
+
+</details>
+
+---
+
+## 🚀 Quick Start (end-to-end in 4 steps)
+
+### 1. Prepare a dataset
+
+#### Option A — Use your own images
+
+Place images in the following structure (relative to the project root):
 
 ```
 dataset/
@@ -68,9 +126,32 @@ dataset/
   fake/   ← AI-generated or manipulated images
 ```
 
-> **Note:** Both sub-folders must contain at least a few images before training will succeed.
+Both sub-folders must contain at least a few images.
 
-### 3. Train the Model
+**Suggested public datasets:**
+
+| Dataset | Description | Link |
+|---|---|---|
+| FaceForensics++ | Video-frame manipulations | [GitHub](https://github.com/ondyari/FaceForensics) |
+| DFDC (Kaggle) | DeepFake Detection Challenge | [Kaggle](https://www.kaggle.com/c/deepfake-detection-challenge) |
+| 140k Real vs Fake | Real Flickr photos + StyleGAN2 fakes | [Kaggle](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) |
+
+#### Option B — Generate synthetic test images (no download needed)
+
+Run the helper script from the **project root**:
+
+```bash
+python scripts/create_sample_dataset.py
+```
+
+This creates 100 synthetic images per class in `dataset/real/` and `dataset/fake/`.
+The images are purely synthetic — useful only to verify that the full pipeline
+(training → model saving → prediction) works correctly before committing to a real dataset.
+
+> **Note:** A model trained on synthetic data will not detect real deepfakes.
+> Use a real dataset for a production-quality classifier.
+
+### 2. Train the model
 
 Run `train.py` from the **project root directory**:
 
@@ -82,7 +163,8 @@ python train.py --dataset_dir dataset --model_type hybrid --epochs 20
 python train.py --dataset_dir dataset --model_type cnn --epochs 20
 ```
 
-Training options:
+<details>
+<summary>All training flags</summary>
 
 | Flag | Default | Description |
 |---|---|---|
@@ -94,6 +176,8 @@ Training options:
 | `--output_dir` | `models` | Where to save model & plots |
 | `--no_augment` | — | Disable data augmentation |
 
+</details>
+
 After training, the following artefacts appear in `models/`:
 
 | File | Description |
@@ -103,7 +187,7 @@ After training, the following artefacts appear in `models/`:
 | `training_history.png` | Accuracy & loss curves |
 | `confusion_matrix.png` | Confusion matrix on the validation set |
 
-### 4. Launch the Web App
+### 3. Launch the web app
 
 ```bash
 streamlit run app/streamlit_app.py
@@ -111,10 +195,10 @@ streamlit run app/streamlit_app.py
 
 Navigate to `http://localhost:8501` in your browser.
 
-> **Important:** Run this command from the **project root directory** so that the default model path (`models/best_hybrid_model.keras`) resolves correctly.  
-> If you saved the model to a different location, update the **Model path** field in the app sidebar.
+> **Important:** Run this command from the **project root directory** so that the default
+> model path (`models/best_hybrid_model.keras`) resolves correctly.
 
-### 5. Run Predictions from the CLI
+### 4. Predict from the CLI
 
 **Single image:**
 ```bash
@@ -134,8 +218,8 @@ python predict.py \
 
 **Using the unified CLI:**
 ```bash
+python main.py train  --dataset_dir dataset --epochs 20
 python main.py predict --model models/best_hybrid_model.keras --image test.jpg
-python main.py train --dataset_dir dataset --epochs 20
 ```
 
 ---
@@ -160,22 +244,59 @@ Use the sidebar to configure:
 
 ## 🛠 Troubleshooting
 
-### "Model not found" warning in the web app
+### ⚠️ "Model not found" warning in the web app
 
 This warning appears when no trained model exists at the configured path.
+The app now shows a built-in step-by-step guide to fix this.
 
-**Fix:**
-1. Train a model first (see [Step 3](#3-train-the-model) above).
-2. Make sure you launch the app from the **project root** directory so that the default relative path `models/best_hybrid_model.keras` resolves correctly:
+**Manual fix:**
+1. Train a model first (see [Step 2](#2-train-the-model) above).
+2. Launch the app from the **project root** so the relative path resolves:
    ```bash
-   # correct — run from the project root
+   # run from the deepfake-image-detection/ directory
    streamlit run app/streamlit_app.py
    ```
-3. If your model is stored elsewhere, enter the correct path in the **Model path** sidebar field (absolute paths are also accepted).
+3. If your model lives elsewhere, type the correct path (absolute paths work too)
+   in the **Model path** sidebar field.
 
-### "ℹ️ First time?" sidebar hint
+### Windows path separators
 
-This hint is a reminder displayed at all times — it is **not** an error. You can ignore it once a model is loaded successfully.
+Windows users can use either forward slashes or backslashes in the **Model path** field:
+
+```
+models/best_hybrid_model.keras      ✅  works on all platforms
+models\best_hybrid_model.keras      ✅  also works on Windows
+C:\Users\you\models\my_model.keras  ✅  absolute path
+```
+
+### Training fails with "No supported images found"
+
+Make sure both `dataset/real/` and `dataset/fake/` contain image files.  
+Run the synthetic-data helper if you need test images quickly:
+
+```bash
+python scripts/create_sample_dataset.py
+```
+
+### `ModuleNotFoundError` when importing project modules
+
+Always run scripts from the **project root**:
+
+```bash
+# ✅ correct
+python train.py
+
+# ❌ wrong — imports will fail
+cd app
+python streamlit_app.py
+```
+
+### Out-of-memory errors during training
+
+Reduce the batch size:
+```bash
+python train.py --batch_size 8 --image_size 64
+```
 
 ---
 

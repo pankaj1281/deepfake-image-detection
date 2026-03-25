@@ -191,15 +191,66 @@ def main() -> None:
     else:
         st.warning(
             f"⚠️ **Model not found** at `{cfg['model_path']}`.\n\n"
-            "**To get started:**\n"
-            "1. Prepare your dataset — place images in `dataset/real/` and `dataset/fake/`\n"
-            "2. Train the model from your project directory:\n"
-            "   ```\n"
-            "   python train.py --dataset_dir dataset --model_type hybrid --epochs 20\n"
-            "   ```\n"
-            "3. The trained model is saved to `models/best_hybrid_model.keras` "
-            "(or update the **Model path** in the sidebar to point to an existing `.keras` / `.h5` file)."
+            "A trained model file is required before predictions can be made. "
+            "Follow the steps below to get started."
         )
+        st.markdown("---")
+        st.subheader("🚀 Quick Setup Guide")
+
+        with st.expander("**Step 1 — Install dependencies** (if not done yet)", expanded=False):
+            st.code(
+                "# Create and activate a virtual environment (recommended)\n"
+                "python -m venv .venv\n\n"
+                "# Windows\n"
+                ".venv\\Scripts\\activate\n\n"
+                "# macOS / Linux\n"
+                "source .venv/bin/activate\n\n"
+                "# Install required packages\n"
+                "pip install -r requirements.txt",
+                language="bash",
+            )
+
+        with st.expander("**Step 2 — Prepare a dataset**", expanded=True):
+            st.markdown(
+                "Place your images in the following folders (relative to the project root):\n"
+                "```\n"
+                "dataset/\n"
+                "  real/   ← authentic images (JPG / PNG / BMP / WEBP)\n"
+                "  fake/   ← AI-generated or manipulated images\n"
+                "```\n\n"
+                "**Don't have a dataset yet?** Generate a small synthetic one for a quick test:\n"
+            )
+            st.code(
+                "python scripts/create_sample_dataset.py",
+                language="bash",
+            )
+            st.caption(
+                "This creates 100 synthetic images per class so you can verify "
+                "the full training pipeline before using real data."
+            )
+
+        with st.expander("**Step 3 — Train the model**", expanded=True):
+            st.markdown("Run the training script **from the project root directory**:")
+            st.code(
+                "# Hybrid model (CNN + FFT) — recommended\n"
+                "python train.py --dataset_dir dataset --model_type hybrid --epochs 20\n\n"
+                "# CNN-only model (faster to train)\n"
+                "python train.py --dataset_dir dataset --model_type cnn --epochs 20",
+                language="bash",
+            )
+            st.markdown(
+                "The best checkpoint is saved to **`models/best_hybrid_model.keras`** "
+                "(same path as the default **Model path** in the sidebar)."
+            )
+
+        with st.expander("**Step 4 — Reload this page**", expanded=False):
+            st.markdown(
+                "Once training finishes, refresh this browser tab. "
+                "The app will automatically load the model and be ready for predictions.\n\n"
+                "If you saved the model to a different location, update the "
+                "**Model path** field in the ⚙️ sidebar."
+            )
+        st.markdown("---")
 
     # ── Image upload ─────────────────────────
     uploaded = st.file_uploader(
