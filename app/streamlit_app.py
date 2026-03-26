@@ -124,7 +124,7 @@ def render_sidebar() -> dict:
         model_path = model_path_input
     model_type = st.sidebar.selectbox(
         "Model type",
-        options=["hybrid", "cnn"],
+        options=["hybrid", "cnn", "efficientnet"],
         index=0,
         help="Architecture of the loaded model.",
     )
@@ -153,7 +153,8 @@ def render_sidebar() -> dict:
     st.sidebar.markdown(
         "**ℹ️ First time?**  "
         "Train a model with `train.py` and then point the *Model path* field "
-        "above to the saved `.keras` file."
+        "above to the saved `.keras` file.  "
+        "For the EfficientNet model use `models/best_efficientnet_model.keras`."
     )
 
     return {
@@ -287,7 +288,7 @@ def main() -> None:
         # Prepare inputs
         spatial, fft = load_single_image(tmp_path, cfg["image_size"])
 
-        if cfg["model_type"] == "hybrid":
+        if cfg["model_type"] in ("hybrid", "efficientnet"):
             model_input = {"spatial_input": spatial, "fft_input": fft}
         else:
             model_input = spatial

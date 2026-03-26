@@ -1,6 +1,6 @@
 # Deepfake Image Detection
 
-A **production-quality** machine learning system that detects whether an image is **Real** or **Fake** using a hybrid spatial + frequency-domain approach, explainable AI (Grad-CAM), and EXIF metadata analysis — served through a clean Streamlit web interface.
+A **production-quality** machine learning system that detects whether an image is **Real** or **Fake** using a hybrid spatial + frequency-domain approach with an optional **pretrained EfficientNetB0 backbone**, explainable AI (Grad-CAM), and EXIF metadata analysis — served through a clean Streamlit web interface.
 
 ---
 
@@ -8,12 +8,16 @@ A **production-quality** machine learning system that detects whether an image i
 
 | Feature | Details |
 |---|---|
-| **Hybrid Model** | CNN (spatial) + FFT (frequency domain) feature fusion |
+| **EfficientNet Hybrid Model** | Pretrained EfficientNetB0 (ImageNet) + FFT branch + SE-attention fusion — **highest accuracy** |
+| **Standard Hybrid Model** | Custom CNN (spatial) + FFT (frequency domain) feature fusion |
 | **CNN Backbone** | 4-block Conv2D network with BatchNorm, Dropout, GlobalAveragePooling |
 | **FFT Branch** | Log-scaled magnitude spectrum as an independent CNN branch |
+| **Two-Phase Training** | Freeze backbone → train head → unfreeze → fine-tune at low LR |
+| **Label Smoothing** | Reduces overconfidence and improves generalisation |
+| **SE Attention** | Squeeze-and-Excitation channel attention in the fusion head |
 | **Grad-CAM** | Visual explanation of _why_ the model predicted Real or Fake |
 | **EXIF Analysis** | Detects missing timestamps, editing-software traces, camera info |
-| **Data Augmentation** | Random flips, rotation, brightness/contrast jitter via `tf.data` |
+| **Data Augmentation** | Random flips, rotation ±20°, brightness/contrast/saturation/hue jitter, random zoom |
 | **Streamlit UI** | Upload → predict → heatmap → metadata, all in the browser |
 | **Batch Prediction** | Run inference on an entire directory of images |
 | **Modular Code** | Clean separation into `utils/`, `models/`, `app/` packages |
@@ -156,10 +160,13 @@ The images are purely synthetic — useful only to verify that the full pipeline
 Run `train.py` from the **project root directory**:
 
 ```bash
-# Hybrid model (CNN + FFT) — recommended
+# EfficientNet hybrid (recommended — highest accuracy)
+python train.py --dataset_dir dataset --model_type efficientnet --image_size 224 --epochs 20 --fine_tune
+
+# Hybrid model (CNN + FFT) — good accuracy, trains faster
 python train.py --dataset_dir dataset --model_type hybrid --epochs 20
 
-# CNN-only model (faster, slightly less accurate)
+# CNN-only model (fastest, lower accuracy)
 python train.py --dataset_dir dataset --model_type cnn --epochs 20
 ```
 
@@ -169,12 +176,14 @@ python train.py --dataset_dir dataset --model_type cnn --epochs 20
 | Flag | Default | Description |
 |---|---|---|
 | `--dataset_dir` | `dataset` | Root dataset directory |
-| `--model_type` | `hybrid` | `hybrid` or `cnn` |
-| `--image_size` | `128` | Resize to N×N pixels |
-| `--epochs` | `20` | Max training epochs |
+| `--model_type` | `hybrid` | `efficientnet`, `hybrid`, or `cnn` |
+| `--image_size` | `128` | Resize to N×N pixels (use `224` for EfficientNet) |
+| `--epochs` | `20` | Max training epochs (phase 1) |
 | `--batch_size` | `32` | Batch size |
 | `--output_dir` | `models` | Where to save model & plots |
 | `--no_augment` | — | Disable data augmentation |
+| `--fine_tune` | — | Enable EfficientNet backbone fine-tuning (phase 2) |
+| `--fine_tune_epochs` | `10` | Additional fine-tuning epochs |
 
 </details>
 
@@ -182,8 +191,9 @@ After training, the following artefacts appear in `models/`:
 
 | File | Description |
 |---|---|
-| `best_hybrid_model.keras` | Best checkpoint (lowest validation loss) |
-| `hybrid_model_final.keras` | Model state after the last epoch |
+| `best_efficientnet_model.keras` | Best EfficientNet checkpoint (highest val AUC) |
+| `best_hybrid_model.keras` | Best hybrid checkpoint |
+| `efficientnet_model_final.keras` | EfficientNet state after the last epoch |
 | `training_history.png` | Accuracy & loss curves |
 | `confusion_matrix.png` | Confusion matrix on the validation set |
 
@@ -197,14 +207,17 @@ Navigate to `http://localhost:8501` in your browser.
 
 > **Important:** Run this command from the **project root directory** so that the default
 > model path (`models/best_hybrid_model.keras`) resolves correctly.
+>
+> For the EfficientNet model, set the **Model path** sidebar field to
+> `models/best_efficientnet_model.keras` and **Model type** to `efficientnet`.
 
 ### 4. Predict from the CLI
 
 **Single image:**
 ```bash
 python predict.py \
-  --model models/best_hybrid_model.keras \
-  --model_type hybrid \
+  --model models/best_efficientnet_model.keras \
+  --model_type efficientnet \
   --image path/to/image.jpg
 ```
 
@@ -218,8 +231,8 @@ python predict.py \
 
 **Using the unified CLI:**
 ```bash
-python main.py train  --dataset_dir dataset --epochs 20
-python main.py predict --model models/best_hybrid_model.keras --image test.jpg
+python main.py train  --dataset_dir dataset --model_type efficientnet --epochs 20 --fine_tune
+python main.py predict --model models/best_efficientnet_model.keras --model_type efficientnet --image test.jpg
 ```
 
 ---
@@ -234,8 +247,8 @@ python main.py predict --model models/best_hybrid_model.keras --image test.jpg
 | **EXIF Metadata** | Camera, software, creation date, manipulation score |
 
 Use the sidebar to configure:
-- **Model path** — relative (e.g. `models/best_hybrid_model.keras`) or absolute path to a `.keras` / `.h5` file
-- **Model type** — `hybrid` or `cnn` (must match how the model was trained)
+- **Model path** — relative (e.g. `models/best_efficientnet_model.keras`) or absolute path to a `.keras` / `.h5` file
+- **Model type** — `efficientnet`, `hybrid`, or `cnn` (must match how the model was trained)
 - **Image size** — resolution the model was trained on (128 or 224)
 - **Decision threshold** — probability above which an image is labelled Fake
 - **Show Grad-CAM / EXIF** toggles
@@ -264,9 +277,9 @@ The app now shows a built-in step-by-step guide to fix this.
 Windows users can use either forward slashes or backslashes in the **Model path** field:
 
 ```
-models/best_hybrid_model.keras      ✅  works on all platforms
-models\best_hybrid_model.keras      ✅  also works on Windows
-C:\Users\you\models\my_model.keras  ✅  absolute path
+models/best_efficientnet_model.keras    ✅  works on all platforms
+models\best_efficientnet_model.keras    ✅  also works on Windows
+C:\Users\you\models\my_model.keras      ✅  absolute path
 ```
 
 ### Training fails with "No supported images found"
@@ -293,9 +306,9 @@ python streamlit_app.py
 
 ### Out-of-memory errors during training
 
-Reduce the batch size:
+Reduce the batch size or image size:
 ```bash
-python train.py --batch_size 8 --image_size 64
+python train.py --batch_size 8 --image_size 128
 ```
 
 ---
@@ -323,6 +336,27 @@ Spatial branch (H×W×3)          FFT branch (H×W×1)
                               Dense(256) → Dropout
                               Dense(1, sigmoid)
 ```
+
+### EfficientNet Hybrid Model ⭐ (recommended)
+```
+Spatial branch (H×W×3)                FFT branch (H×W×1)
+  EfficientNetB0 (ImageNet weights)       4-block Conv2D + GAP
+  → GlobalAveragePooling                  → Dense(256)
+  → Dense(256) → Dropout           ┐
+                                   └── Concatenate ──┐
+                                                      ↓
+                                       Dense(512) → BN → Dropout
+                                       SE Attention (channel-wise)
+                                       Dense(256) → Dropout
+                                       Dense(1, sigmoid)
+```
+
+The **EfficientNet Hybrid** model combines:
+- **Transfer learning**: EfficientNetB0 pretrained on ImageNet provides rich visual features even with small datasets.
+- **FFT frequency features**: Detects GAN/diffusion-model artifacts in the frequency domain that are invisible to the human eye.
+- **SE Attention**: Squeeze-and-Excitation block learns which fused feature channels are most informative per sample.
+- **Two-phase training**: Train only the head first (fast convergence), then fine-tune the whole network at a lower learning rate.
+- **Label smoothing**: Prevents overconfident predictions and improves generalisation to unseen test images.
 
 ---
 
@@ -356,6 +390,10 @@ After training, the script prints:
 - Accuracy, Precision, Recall, F1-score (per class)
 - Confusion matrix (saved as PNG)
 - Training vs. validation accuracy / loss curves (saved as PNG)
+
+Training is monitored on **validation AUC** (area under the ROC curve) rather than just
+accuracy — AUC is a more robust metric for imbalanced datasets and correlates better with
+real-world detection performance.
 
 ---
 

@@ -20,7 +20,7 @@ LABEL_FAKE = 1
 # Created once at module level so that the internal tf.Variables are not
 # re-created inside a tf.function / tf.data.Dataset.map call (which would
 # raise a "singleton tf.Variables" error on every re-trace).
-_augmentation_rotation = tf.keras.layers.RandomRotation(factor=15 / 360)
+_augmentation_rotation = tf.keras.layers.RandomRotation(factor=20 / 360)
 
 
 # ─────────────────────────────────────────────
@@ -278,8 +278,9 @@ def _augment_sample(inputs: dict, label):
     Augmentations applied:
     - Random horizontal flip
     - Random vertical flip
-    - Random rotation (±15°)
-    - Random brightness / contrast jitter
+    - Random rotation (±20°)
+    - Random brightness / contrast / saturation / hue jitter
+    - Random zoom (central crop + resize back)
 
     Note: FFT features are re-computed from the augmented spatial image
     so both branches stay consistent.
@@ -290,18 +291,27 @@ def _augment_sample(inputs: dict, label):
     spatial = tf.image.random_flip_left_right(spatial)
     spatial = tf.image.random_flip_up_down(spatial)
 
-    # Random rotation (±15°) — use module-level layer to avoid creating
+    # Random rotation (±20°) — use module-level layer to avoid creating
     # new tf.Variables on every map call inside a tf.function.
-    # training=True is correct: _augment_sample is only called on the
-    # training dataset, never on the validation set.
     spatial = _augmentation_rotation(
         tf.expand_dims(spatial, 0), training=True
     )[0]
 
-    # Random brightness / contrast
-    spatial = tf.image.random_brightness(spatial, max_delta=0.1)
-    spatial = tf.image.random_contrast(spatial, lower=0.9, upper=1.1)
+    # Random brightness / contrast / saturation / hue jitter
+    spatial = tf.image.random_brightness(spatial, max_delta=0.2)
+    spatial = tf.image.random_contrast(spatial, lower=0.8, upper=1.2)
+    spatial = tf.image.random_saturation(spatial, lower=0.7, upper=1.3)
+    spatial = tf.image.random_hue(spatial, max_delta=0.05)
     spatial = tf.clip_by_value(spatial, 0.0, 1.0)
+
+    # Random zoom: crop a random 80–99 % region then resize back
+    shape = tf.shape(spatial)
+    h, w = shape[0], shape[1]
+    scale = tf.random.uniform((), minval=0.80, maxval=0.99)
+    crop_h = tf.cast(tf.cast(h, tf.float32) * scale, tf.int32)
+    crop_w = tf.cast(tf.cast(w, tf.float32) * scale, tf.int32)
+    spatial = tf.image.random_crop(spatial, size=[crop_h, crop_w, 3])
+    spatial = tf.image.resize(spatial, [h, w])
 
     # Re-compute FFT from augmented image
     fft = tf.numpy_function(
