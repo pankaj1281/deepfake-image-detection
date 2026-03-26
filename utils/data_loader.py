@@ -17,6 +17,11 @@ IMAGE_SIZE = (128, 128)  # (height, width) — can be overridden to (224, 224)
 LABEL_REAL = 0
 LABEL_FAKE = 1
 
+# Created once at module level so that the internal tf.Variables are not
+# re-created inside a tf.function / tf.data.Dataset.map call (which would
+# raise a "singleton tf.Variables" error on every re-trace).
+_augmentation_rotation = tf.keras.layers.RandomRotation(factor=15 / 360)
+
 
 # ─────────────────────────────────────────────
 # FFT helpers
@@ -72,7 +77,7 @@ def load_single_image(
         - fft_input:     shape (1, H, W, 1), normalized FFT magnitude
     """
     img = Image.open(image_path).convert("RGB")
-    img = img.resize((image_size[1], image_size[0]))
+    img = img.resize((image_size[1], image_size[0]), Image.LANCZOS)
     img_array = np.array(img, dtype=np.float32) / 255.0
 
     spatial = img_array[np.newaxis, ...]          # (1, H, W, 3)
@@ -148,7 +153,7 @@ class DataLoader:
     def _load_image(self, path: str) -> np.ndarray:
         """Load, resize and normalise a single image → float32 (H, W, 3)."""
         img = Image.open(path).convert("RGB")
-        img = img.resize((self.image_size[1], self.image_size[0]))
+        img = img.resize((self.image_size[1], self.image_size[0]), Image.LANCZOS)
         return np.array(img, dtype=np.float32) / 255.0
 
     # ── public API ───────────────────────────
@@ -285,9 +290,12 @@ def _augment_sample(inputs: dict, label):
     spatial = tf.image.random_flip_left_right(spatial)
     spatial = tf.image.random_flip_up_down(spatial)
 
-    # Random rotation (±15°)
-    spatial = tf.keras.layers.RandomRotation(factor=15 / 360)(
-        tf.expand_dims(spatial, 0)
+    # Random rotation (±15°) — use module-level layer to avoid creating
+    # new tf.Variables on every map call inside a tf.function.
+    # training=True is correct: _augment_sample is only called on the
+    # training dataset, never on the validation set.
+    spatial = _augmentation_rotation(
+        tf.expand_dims(spatial, 0), training=True
     )[0]
 
     # Random brightness / contrast
@@ -297,7 +305,7 @@ def _augment_sample(inputs: dict, label):
 
     # Re-compute FFT from augmented image
     fft = tf.numpy_function(
-        func=lambda x: compute_fft_features(x.numpy()),
+        func=compute_fft_features,
         inp=[spatial],
         Tout=tf.float32,
     )
