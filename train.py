@@ -2,12 +2,13 @@
 train.py — Full training pipeline for the Fake Image Detection system.
 
 Usage:
-    python train.py [--dataset_dir DATASET_DIR] [--model_type {cnn,hybrid}]
+    python train.py [--dataset_dir DATASET_DIR] [--model_type {cnn,hybrid,efficientnet}]
                     [--image_size IMAGE_SIZE] [--epochs EPOCHS]
                     [--batch_size BATCH_SIZE] [--output_dir OUTPUT_DIR]
+                    [--fine_tune] [--fine_tune_epochs FINE_TUNE_EPOCHS]
 
 Example:
-    python train.py --dataset_dir dataset --model_type hybrid --epochs 20
+    python train.py --dataset_dir dataset --model_type efficientnet --epochs 20 --fine_tune
 """
 
 import argparse
@@ -27,6 +28,7 @@ import tensorflow as tf
 from utils.data_loader import DataLoader
 from models.cnn_model import build_cnn_model
 from models.hybrid_model import build_hybrid_model
+from models.efficientnet_model import build_efficientnet_hybrid_model
 
 
 # ─────────────────────────────────────────────
@@ -42,7 +44,7 @@ def parse_args() -> argparse.Namespace:
         help="Root dataset directory containing real/ and fake/ sub-folders."
     )
     parser.add_argument(
-        "--model_type", default="hybrid", choices=["cnn", "hybrid"],
+        "--model_type", default="hybrid", choices=["cnn", "hybrid", "efficientnet"],
         help="Model architecture to train (default: hybrid)."
     )
     parser.add_argument(
@@ -64,6 +66,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no_augment", action="store_true",
         help="Disable training-time data augmentation."
+    )
+    parser.add_argument(
+        "--fine_tune", action="store_true",
+        help=(
+            "Enable fine-tuning phase after initial training (efficientnet only). "
+            "Unfreezes the EfficientNetB0 backbone and continues training at a lower LR."
+        ),
+    )
+    parser.add_argument(
+        "--fine_tune_epochs", type=int, default=10,
+        help="Number of additional fine-tuning epochs (default: 10)."
     )
     return parser.parse_args()
 
@@ -125,21 +138,56 @@ def plot_confusion_matrix(y_true, y_pred, output_dir: str) -> None:
 # Core training function
 # ─────────────────────────────────────────────
 
+def _build_callbacks(best_model_path: str) -> list:
+    """Return the standard set of training callbacks."""
+    return [
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_auc",
+            patience=7,
+            restore_best_weights=True,
+            mode="max",
+            verbose=1,
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath=best_model_path,
+            monitor="val_auc",
+            save_best_only=True,
+            mode="max",
+            verbose=1,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=3,
+            min_lr=1e-7,
+            verbose=1,
+        ),
+    ]
+
+
 def train(args: argparse.Namespace) -> None:
     """
     End-to-end training pipeline.
 
     Steps:
     1. Load and preprocess dataset.
-    2. Build model (CNN or Hybrid).
+    2. Build model (CNN, Hybrid, or EfficientNet hybrid).
     3. Train with EarlyStopping + ModelCheckpoint callbacks.
-    4. Evaluate on validation set.
-    5. Save model, plots, and evaluation report.
+    4. (Optional) Fine-tune the EfficientNet backbone at a lower LR.
+    5. Evaluate on validation set.
+    6. Save model, plots, and evaluation report.
 
     Args:
         args: Parsed command-line arguments.
     """
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # EfficientNetB0 expects at least 32×32; recommend 224×224 for best results
+    if args.model_type == "efficientnet" and args.image_size < 96:
+        print(
+            "[WARNING] image_size < 96 with efficientnet may hurt accuracy. "
+            "Consider --image_size 224 for best results."
+        )
 
     image_size = (args.image_size, args.image_size)
 
@@ -158,7 +206,13 @@ def train(args: argparse.Namespace) -> None:
 
     # ── 2. Build model ───────────────────────
     print(f"[INFO] Building {args.model_type} model …")
-    if args.model_type == "hybrid":
+    if args.model_type == "efficientnet":
+        model = build_efficientnet_hybrid_model(
+            spatial_input_shape=(*image_size, 3),
+            fft_input_shape=(*image_size, 1),
+            freeze_backbone=True,   # Phase 1: frozen backbone
+        )
+    elif args.model_type == "hybrid":
         model = build_hybrid_model(
             spatial_input_shape=(*image_size, 3),
             fft_input_shape=(*image_size, 1),
@@ -172,29 +226,9 @@ def train(args: argparse.Namespace) -> None:
     best_model_path = os.path.join(
         args.output_dir, f"best_{args.model_type}_model.keras"
     )
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss",
-            patience=5,
-            restore_best_weights=True,
-            verbose=1,
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            filepath=best_model_path,
-            monitor="val_loss",
-            save_best_only=True,
-            verbose=1,
-        ),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss",
-            factor=0.5,
-            patience=3,
-            min_lr=1e-7,
-            verbose=1,
-        ),
-    ]
+    callbacks = _build_callbacks(best_model_path)
 
-    # ── 4. Train ─────────────────────────────
+    # ── 4. Train (phase 1) ───────────────────
     print(f"[INFO] Training for up to {args.epochs} epochs …")
     history = model.fit(
         train_ds,
@@ -203,9 +237,45 @@ def train(args: argparse.Namespace) -> None:
         callbacks=callbacks,
     )
 
+    # ── 4b. Fine-tune phase (efficientnet only) ──
+    if args.model_type == "efficientnet" and args.fine_tune:
+        print(
+            f"\n[INFO] Fine-tuning EfficientNetB0 backbone "
+            f"for up to {args.fine_tune_epochs} additional epochs …"
+        )
+        # Unfreeze the backbone and re-compile with a lower LR
+        backbone_layer = model.get_layer("efficientnetb0_backbone")
+        backbone_layer.trainable = True
+
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            loss=tf.keras.losses.BinaryCrossentropy(label_smoothing=0.1),
+            metrics=[
+                "accuracy",
+                tf.keras.metrics.Precision(name="precision"),
+                tf.keras.metrics.Recall(name="recall"),
+                tf.keras.metrics.AUC(name="auc"),
+            ],
+        )
+
+        fine_tune_callbacks = _build_callbacks(best_model_path)
+        history_ft = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=args.fine_tune_epochs,
+            callbacks=fine_tune_callbacks,
+        )
+
+        # Merge history dicts safely (only merge keys present in both runs)
+        for key in list(history.history.keys()):
+            if key in history_ft.history:
+                history.history[key] = (
+                    history.history[key] + history_ft.history[key]
+                )
+
     # ── 5. Evaluate ──────────────────────────
     print("[INFO] Evaluating on validation set …")
-    if args.model_type == "hybrid":
+    if args.model_type in ("hybrid", "efficientnet"):
         x_val = {
             "spatial_input": loader.x_val_spatial,
             "fft_input": loader.x_val_fft,

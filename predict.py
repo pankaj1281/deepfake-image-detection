@@ -10,7 +10,7 @@ Usage (batch / directory):
 
 Options:
     --model       Path to a saved Keras model (.keras / .h5).
-    --model_type  Architecture type: cnn | hybrid (default: hybrid).
+    --model_type  Architecture type: cnn | hybrid | efficientnet (default: hybrid).
     --image       Path to a single image file.
     --input_dir   Directory of images for batch prediction.
     --output_dir  Directory to save Grad-CAM heatmaps (default: predictions).
@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", required=True,
                         help="Path to the saved Keras model.")
-    parser.add_argument("--model_type", default="hybrid", choices=["cnn", "hybrid"],
+    parser.add_argument("--model_type", default="hybrid", choices=["cnn", "hybrid", "efficientnet"],
                         help="Model architecture type (default: hybrid).")
     parser.add_argument("--image", default=None,
                         help="Path to a single image for prediction.")
@@ -101,7 +101,7 @@ def predict_single(
     spatial, fft = load_single_image(image_path, image_size)
 
     # Build model input
-    if model_type == "hybrid":
+    if model_type in ("hybrid", "efficientnet"):
         model_input = {"spatial_input": spatial, "fft_input": fft}
     else:
         model_input = spatial
