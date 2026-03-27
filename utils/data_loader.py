@@ -95,8 +95,15 @@ class DataLoader:
     Loads images from a directory that follows the structure:
 
         root/
-          real/   ← images labelled as REAL (label 0)
-          fake/   ← images labelled as FAKE (label 1)
+          real/           ← images labelled as REAL (label 0)
+          fake/           ← images labelled as FAKE (label 1)
+          fake_gan/       ← (optional) GAN-generated images (label 1)
+          fake_faceswap/  ← (optional) face-swap images (label 1)
+          fake_diffusion/ ← (optional) diffusion-generated images (label 1)
+
+    Any sub-folder named ``fake`` or starting with ``fake_`` is treated as
+    a fake image source, making it easy to add new fake types without code
+    changes.
 
     After calling ``load()``, the instance exposes:
         - x_train_spatial, x_val_spatial  : float32 (N, H, W, 3)
@@ -104,7 +111,7 @@ class DataLoader:
         - y_train,         y_val           : int32   (N,)
 
     Args:
-        dataset_dir: Root directory containing *real/* and *fake/* sub-folders.
+        dataset_dir: Root directory containing *real/* and fake sub-folders.
         image_size:  Target (height, width) for resizing. Default: (128, 128).
         test_size:   Fraction of data to reserve for validation. Default: 0.2.
         seed:        Random seed for reproducibility. Default: 42.
@@ -135,19 +142,52 @@ class DataLoader:
     # ── private helpers ──────────────────────
 
     def _collect_paths(self) -> tuple:
-        """Return (image_paths, labels) lists."""
+        """Return (image_paths, labels) lists.
+
+        Scans ``real/`` for real images (label 0) and all sub-folders whose
+        names start with ``fake`` for fake images (label 1).  This allows
+        organizing multiple fake types in separate directories, e.g.:
+
+            dataset/
+              real/
+              fake/           ← general fake images
+              fake_gan/       ← GAN-generated images
+              fake_faceswap/  ← face-swap images
+              fake_diffusion/ ← diffusion-model images
+        """
         paths, labels = [], []
-        for label, sub in [(LABEL_REAL, "real"), (LABEL_FAKE, "fake")]:
+
+        # ── Real images ──────────────────────
+        real_folder = os.path.join(self.dataset_dir, "real")
+        if not os.path.isdir(real_folder):
+            raise FileNotFoundError(
+                f"Expected sub-folder not found: {real_folder}"
+            )
+        for fname in sorted(os.listdir(real_folder)):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in self.SUPPORTED_EXTENSIONS:
+                paths.append(os.path.join(real_folder, fname))
+                labels.append(LABEL_REAL)
+
+        # ── Fake images (all sub-folders whose name starts with "fake") ──
+        fake_folders = sorted(
+            d for d in os.listdir(self.dataset_dir)
+            if (d == "fake" or d.startswith("fake_"))
+            and os.path.isdir(os.path.join(self.dataset_dir, d))
+        )
+        if not fake_folders:
+            raise FileNotFoundError(
+                f"No fake sub-folder found in {self.dataset_dir}. "
+                "Expected at least one folder named 'fake' or starting with 'fake_'."
+            )
+        for sub in fake_folders:
             folder = os.path.join(self.dataset_dir, sub)
-            if not os.path.isdir(folder):
-                raise FileNotFoundError(
-                    f"Expected sub-folder not found: {folder}"
-                )
             for fname in sorted(os.listdir(folder)):
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in self.SUPPORTED_EXTENSIONS:
                     paths.append(os.path.join(folder, fname))
-                    labels.append(label)
+                    labels.append(LABEL_FAKE)
+
         return paths, labels
 
     def _load_image(self, path: str) -> np.ndarray:

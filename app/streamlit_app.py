@@ -216,13 +216,21 @@ def main() -> None:
                 "Place your images in the following folders (relative to the project root):\n"
                 "```\n"
                 "dataset/\n"
-                "  real/   ← authentic images (JPG / PNG / BMP / WEBP)\n"
-                "  fake/   ← AI-generated or manipulated images\n"
+                "  real/           ← authentic images (JPG / PNG / BMP / WEBP)\n"
+                "  fake/           ← AI-generated or manipulated images\n"
+                "  fake_gan/       ← (optional) GAN-generated images\n"
+                "  fake_faceswap/  ← (optional) face-swap images\n"
+                "  fake_diffusion/ ← (optional) diffusion-model images\n"
                 "```\n\n"
+                "Any folder named `fake` or starting with `fake_` is automatically "
+                "treated as a fake image source.  "
                 "**Don't have a dataset yet?** Generate a small synthetic one for a quick test:\n"
             )
             st.code(
-                "python scripts/create_sample_dataset.py",
+                "# Single fake/ folder (simple)\n"
+                "python scripts/create_sample_dataset.py\n\n"
+                "# Three fake sub-folders (GAN, face-swap, diffusion)\n"
+                "python scripts/create_sample_dataset.py --multi_fake",
                 language="bash",
             )
             st.caption(
@@ -233,15 +241,18 @@ def main() -> None:
         with st.expander("**Step 3 — Train the model**", expanded=True):
             st.markdown("Run the training script **from the project root directory**:")
             st.code(
-                "# Hybrid model (CNN + FFT) — recommended\n"
+                "# EfficientNet hybrid model (recommended — best accuracy)\n"
+                "python train.py --dataset_dir dataset --model_type efficientnet "
+                "--image_size 224 --epochs 20 --fine_tune\n\n"
+                "# Hybrid model (CNN + FFT) — faster to train\n"
                 "python train.py --dataset_dir dataset --model_type hybrid --epochs 20\n\n"
-                "# CNN-only model (faster to train)\n"
+                "# CNN-only model (fastest)\n"
                 "python train.py --dataset_dir dataset --model_type cnn --epochs 20",
                 language="bash",
             )
             st.markdown(
-                "The best checkpoint is saved to **`models/best_hybrid_model.keras`** "
-                "(same path as the default **Model path** in the sidebar)."
+                "The best checkpoint is saved to **`models/best_efficientnet_model.keras`** "
+                "or **`models/best_hybrid_model.keras`** depending on the model type chosen."
             )
 
         with st.expander("**Step 4 — Reload this page**", expanded=False):
