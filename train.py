@@ -22,13 +22,41 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     accuracy_score,
+    f1_score,
 )
+from sklearn.utils.class_weight import compute_class_weight
 import tensorflow as tf
 
 from utils.data_loader import DataLoader
 from models.cnn_model import build_cnn_model
 from models.hybrid_model import build_hybrid_model
 from models.efficientnet_model import build_efficientnet_hybrid_model
+
+
+# ─────────────────────────────────────────────
+# GPU / mixed-precision setup
+# ─────────────────────────────────────────────
+
+def _configure_gpu() -> None:
+    """Enable GPU memory growth and mixed precision when a GPU is available.
+
+    Mixed precision (``mixed_float16``) speeds up training on Tensor Core GPUs
+    (Volta, Turing, Ampere and newer) by performing computation in float16 while
+    keeping master weights in float32.  It is safe for this model, but on very
+    old GPUs or with custom loss functions that accumulate small gradients you
+    may occasionally see NaN losses — in that case re-run without a GPU or
+    disable mixed precision by removing the ``set_global_policy`` call below.
+    """
+    gpus = tf.config.list_physical_devices("GPU")
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        # Mixed precision (float16 compute, float32 weights) roughly doubles
+        # throughput on Tensor Core GPUs (Volta, Turing, Ampere, etc.)
+        tf.keras.mixed_precision.set_global_policy("mixed_float16")
+        print(f"[INFO] GPU detected ({len(gpus)} device(s)) — mixed precision enabled.")
+    else:
+        print("[INFO] No GPU detected — training on CPU.")
 
 
 # ─────────────────────────────────────────────
@@ -77,6 +105,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fine_tune_epochs", type=int, default=10,
         help="Number of additional fine-tuning epochs (default: 10)."
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.5,
+        help="Decision threshold for converting probability to binary label (default: 0.5)."
     )
     return parser.parse_args()
 
@@ -170,16 +202,19 @@ def train(args: argparse.Namespace) -> None:
     End-to-end training pipeline.
 
     Steps:
-    1. Load and preprocess dataset.
-    2. Build model (CNN, Hybrid, or EfficientNet hybrid).
-    3. Train with EarlyStopping + ModelCheckpoint callbacks.
-    4. (Optional) Fine-tune the EfficientNet backbone at a lower LR.
-    5. Evaluate on validation set.
-    6. Save model, plots, and evaluation report.
+    1. Configure GPU / mixed precision.
+    2. Load and preprocess dataset.
+    3. Print class distribution and compute class weights.
+    4. Build model (CNN, Hybrid, or EfficientNet hybrid).
+    5. Train with EarlyStopping + ModelCheckpoint callbacks.
+    6. (Optional) Fine-tune the EfficientNet backbone at a lower LR.
+    7. Evaluate on validation set; print predictions distribution.
+    8. Save model, plots, and evaluation report.
 
     Args:
         args: Parsed command-line arguments.
     """
+    _configure_gpu()
     os.makedirs(args.output_dir, exist_ok=True)
 
     # EfficientNetB0 expects at least 32×32; recommend 224×224 for best results
@@ -199,12 +234,32 @@ def train(args: argparse.Namespace) -> None:
     )
     loader.load()
 
+    # ── 2. Class distribution & class weights ─
+    n_real = int(np.sum(loader.y_train == 0))
+    n_fake = int(np.sum(loader.y_train == 1))
+    n_total = len(loader.y_train)
+    print(f"\n{'─'*50}")
+    print("  Class distribution (training set):")
+    print(f"    Real (0) : {n_real:>6}  ({n_real/n_total:.1%})")
+    print(f"    Fake (1) : {n_fake:>6}  ({n_fake/n_total:.1%})")
+    print(f"    Total    : {n_total:>6}")
+    print(f"{'─'*50}\n")
+
+    classes = np.unique(loader.y_train)
+    raw_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=classes,
+        y=loader.y_train,
+    )
+    class_weight_dict = dict(zip(classes.tolist(), raw_weights.tolist()))
+    print(f"[INFO] Class weights: {class_weight_dict}")
+
     train_ds, val_ds = loader.get_tf_datasets(
         batch_size=args.batch_size,
         augment_train=not args.no_augment,
     )
 
-    # ── 2. Build model ───────────────────────
+    # ── 3. Build model ───────────────────────
     print(f"[INFO] Building {args.model_type} model …")
     if args.model_type == "efficientnet":
         model = build_efficientnet_hybrid_model(
@@ -222,22 +277,23 @@ def train(args: argparse.Namespace) -> None:
 
     model.summary()
 
-    # ── 3. Callbacks ─────────────────────────
+    # ── 4. Callbacks ─────────────────────────
     best_model_path = os.path.join(
         args.output_dir, f"best_{args.model_type}_model.keras"
     )
     callbacks = _build_callbacks(best_model_path)
 
-    # ── 4. Train (phase 1) ───────────────────
+    # ── 5. Train (phase 1) ───────────────────
     print(f"[INFO] Training for up to {args.epochs} epochs …")
     history = model.fit(
         train_ds,
         validation_data=val_ds,
         epochs=args.epochs,
         callbacks=callbacks,
+        class_weight=class_weight_dict,
     )
 
-    # ── 4b. Fine-tune phase (efficientnet only) ──
+    # ── 5b. Fine-tune phase (efficientnet only) ──
     if args.model_type == "efficientnet" and args.fine_tune:
         print(
             f"\n[INFO] Fine-tuning EfficientNetB0 backbone "
@@ -264,6 +320,7 @@ def train(args: argparse.Namespace) -> None:
             validation_data=val_ds,
             epochs=args.fine_tune_epochs,
             callbacks=fine_tune_callbacks,
+            class_weight=class_weight_dict,
         )
 
         # Merge history dicts safely (only merge keys present in both runs)
@@ -273,7 +330,7 @@ def train(args: argparse.Namespace) -> None:
                     history.history[key] + history_ft.history[key]
                 )
 
-    # ── 5. Evaluate ──────────────────────────
+    # ── 6. Evaluate ──────────────────────────
     print("[INFO] Evaluating on validation set …")
     if args.model_type in ("hybrid", "efficientnet"):
         x_val = {
@@ -284,16 +341,29 @@ def train(args: argparse.Namespace) -> None:
         x_val = loader.x_val_spatial
 
     y_prob = model.predict(x_val, verbose=0).flatten()
-    y_pred = (y_prob >= 0.5).astype(int)
+    y_pred = (y_prob >= args.threshold).astype(int)
     y_true = loader.y_val
 
+    # Predictions distribution
+    n_pred_fake = int(np.sum(y_pred == 1))
+    n_pred_real = int(np.sum(y_pred == 0))
+    print(f"\n{'─'*50}")
+    print("  Predictions distribution (validation set):")
+    print(f"    Predicted Real (0) : {n_pred_real:>6}")
+    print(f"    Predicted Fake (1) : {n_pred_fake:>6}")
+    print(f"    Threshold used     : {args.threshold}")
+    print(f"{'─'*50}")
+
     acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average="weighted", zero_division=0)
     print(f"\n{'─'*50}")
     print(f"  Validation Accuracy : {acc:.4f}")
+    print(f"  Weighted F1-Score   : {f1:.4f}")
     print(f"{'─'*50}")
-    print(classification_report(y_true, y_pred, target_names=["Real", "Fake"]))
+    print(classification_report(y_true, y_pred, target_names=["Real", "Fake"],
+                                 zero_division=0))
 
-    # ── 6. Save artefacts ────────────────────
+    # ── 7. Save artefacts ────────────────────
     plot_training_history(history, args.output_dir)
     plot_confusion_matrix(y_true, y_pred, args.output_dir)
 
