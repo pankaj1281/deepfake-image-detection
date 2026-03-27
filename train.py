@@ -76,8 +76,8 @@ def parse_args() -> argparse.Namespace:
         help="Model architecture to train (default: hybrid)."
     )
     parser.add_argument(
-        "--image_size", type=int, default=128,
-        help="Resize images to IMAGE_SIZE × IMAGE_SIZE (default: 128)."
+        "--image_size", type=int, default=224,
+        help="Resize images to IMAGE_SIZE × IMAGE_SIZE (default: 224)."
     )
     parser.add_argument(
         "--epochs", type=int, default=20,
@@ -174,17 +174,17 @@ def _build_callbacks(best_model_path: str) -> list:
     """Return the standard set of training callbacks."""
     return [
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_auc",
-            patience=7,
+            monitor="val_loss",
+            patience=3,
             restore_best_weights=True,
-            mode="max",
+            mode="min",
             verbose=1,
         ),
         tf.keras.callbacks.ModelCheckpoint(
             filepath=best_model_path,
-            monitor="val_auc",
+            monitor="val_loss",
             save_best_only=True,
-            mode="max",
+            mode="min",
             verbose=1,
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
@@ -218,9 +218,9 @@ def train(args: argparse.Namespace) -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
     # EfficientNetB0 expects at least 32×32; recommend 224×224 for best results
-    if args.model_type == "efficientnet" and args.image_size < 96:
+    if args.model_type == "efficientnet" and args.image_size < 224:
         print(
-            "[WARNING] image_size < 96 with efficientnet may hurt accuracy. "
+            "[WARNING] image_size < 224 with efficientnet may hurt accuracy. "
             "Consider --image_size 224 for best results."
         )
 
