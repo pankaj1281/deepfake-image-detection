@@ -1,4 +1,4 @@
-# Deepfake Image Detection
+# Deepfake Image Detection using Optimized CNN
 
 A **production-quality** machine learning system that detects whether an image is **Real** or **Fake** using a hybrid spatial + frequency-domain approach with an optional **pretrained EfficientNetB0 backbone**, explainable AI (Grad-CAM), and EXIF metadata analysis — served through a clean Streamlit web interface.
 
@@ -8,6 +8,9 @@ A **production-quality** machine learning system that detects whether an image i
 
 | Feature | Details |
 |---|---|
+| **Fast Training** | Lightweight EfficientNetB0 backbone with two-phase training; 128×128 images finish initial training in under 30 minutes on a modern GPU with a 10 k-image dataset |
+| **Balanced Prediction** | Automatic class-weight computation eliminates single-class prediction bias |
+| **Real/Fake Classification with Confidence** | Every prediction returns a label (**Real** / **Fake**) plus a confidence score (%) |
 | **EfficientNet Hybrid Model** | Pretrained EfficientNetB0 (ImageNet) + FFT branch + SE-attention fusion — **highest accuracy** |
 | **Standard Hybrid Model** | Custom CNN (spatial) + FFT (frequency domain) feature fusion |
 | **CNN Backbone** | 4-block Conv2D network with BatchNorm, Dropout, GlobalAveragePooling |
@@ -15,12 +18,49 @@ A **production-quality** machine learning system that detects whether an image i
 | **Two-Phase Training** | Freeze backbone → train head → unfreeze → fine-tune at low LR |
 | **Label Smoothing** | Reduces overconfidence and improves generalisation |
 | **SE Attention** | Squeeze-and-Excitation channel attention in the fusion head |
+| **Mixed Precision** | Automatically enabled on GPU for ~2× throughput (float16 compute, float32 weights) |
+| **Class Imbalance Handling** | `compute_class_weight("balanced")` passed to `model.fit()` |
 | **Grad-CAM** | Visual explanation of _why_ the model predicted Real or Fake |
 | **EXIF Analysis** | Detects missing timestamps, editing-software traces, camera info |
 | **Data Augmentation** | Random flips, rotation ±20°, brightness/contrast/saturation/hue jitter, random zoom |
 | **Streamlit UI** | Upload → predict → heatmap → metadata, all in the browser |
 | **Batch Prediction** | Run inference on an entire directory of images |
 | **Modular Code** | Clean separation into `utils/`, `models/`, `app/` packages |
+
+---
+
+## 🛠 Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Deep learning | TensorFlow / Keras ≥ 2.10 |
+| Transfer learning | EfficientNetB0 (ImageNet pretrained) |
+| Data pipeline | `tf.data` with cache & prefetch |
+| Image processing | OpenCV, Pillow |
+| Classical ML | scikit-learn (class weights, metrics, confusion matrix) |
+| Visualisation | Matplotlib, Seaborn |
+| Web app | Streamlit |
+| Metadata | Pillow EXIF |
+
+---
+
+## 🗂 Dataset Structure
+
+```
+dataset/
+  real/   ← authentic images (JPG / PNG / BMP / WEBP)
+  fake/   ← AI-generated or manipulated images
+```
+
+Both sub-folders must contain at least a few images.
+
+**Suggested public datasets:**
+
+| Dataset | Description | Link |
+|---|---|---|
+| FaceForensics++ | Video-frame manipulations | [GitHub](https://github.com/ondyari/FaceForensics) |
+| DFDC (Kaggle) | DeepFake Detection Challenge | [Kaggle](https://www.kaggle.com/c/deepfake-detection-challenge) |
+| 140k Real vs Fake | Real Flickr photos + StyleGAN2 fakes | [Kaggle](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) |
 
 ---
 
@@ -36,7 +76,7 @@ deepfake-image-detection/
 │   └── create_sample_dataset.py  ← generate synthetic images for pipeline testing
 ├── utils/
 │   ├── __init__.py
-│   ├── data_loader.py ← dataset loading, FFT features, augmentation
+│   ├── data_loader.py ← dataset loading, FFT features, tf.data pipeline, augmentation
 │   ├── grad_cam.py    ← Grad-CAM implementation
 │   └── metadata.py   ← EXIF metadata analysis
 ├── app/
@@ -69,8 +109,6 @@ cd deepfake-image-detection
 
 ### Step 2 — Create a virtual environment (recommended)
 
-Using a virtual environment keeps the project's dependencies isolated.
-
 **Windows (Command Prompt / PowerShell):**
 ```bat
 python -m venv .venv
@@ -83,9 +121,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-> After activation, your prompt will be prefixed with `(.venv)`.  
-> To deactivate later, run `deactivate`.
-
 ### Step 3 — Install dependencies
 
 ```bash
@@ -95,8 +130,6 @@ pip install -r requirements.txt
 
 <details>
 <summary>GPU acceleration (optional, NVIDIA only)</summary>
-
-To use an NVIDIA GPU on Linux or Windows, replace the CPU-only TensorFlow wheel with the GPU build:
 
 ```bash
 pip install tensorflow[and-cuda]   # TensorFlow ≥ 2.13 on Linux/Windows
@@ -116,48 +149,25 @@ python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU')
 
 ---
 
-## 🚀 Quick Start (end-to-end in 4 steps)
+## 🚀 How to Train
 
-### 1. Prepare a dataset
+### Prepare a dataset
 
-#### Option A — Use your own images
-
-Place images in the following structure (relative to the project root):
-
-```
-dataset/
-  real/   ← authentic images (JPG / PNG / BMP / WEBP)
-  fake/   ← AI-generated or manipulated images
-```
-
-Both sub-folders must contain at least a few images.
-
-**Suggested public datasets:**
-
-| Dataset | Description | Link |
-|---|---|---|
-| FaceForensics++ | Video-frame manipulations | [GitHub](https://github.com/ondyari/FaceForensics) |
-| DFDC (Kaggle) | DeepFake Detection Challenge | [Kaggle](https://www.kaggle.com/c/deepfake-detection-challenge) |
-| 140k Real vs Fake | Real Flickr photos + StyleGAN2 fakes | [Kaggle](https://www.kaggle.com/datasets/xhlulu/140k-real-and-fake-faces) |
-
-#### Option B — Generate synthetic test images (no download needed)
-
-Run the helper script from the **project root**:
+Place images in `dataset/real/` and `dataset/fake/`, or generate synthetic test images:
 
 ```bash
 python scripts/create_sample_dataset.py
 ```
 
-This creates 100 synthetic images per class in `dataset/real/` and `dataset/fake/`.
-The images are purely synthetic — useful only to verify that the full pipeline
-(training → model saving → prediction) works correctly before committing to a real dataset.
+### Train the model
 
-> **Note:** A model trained on synthetic data will not detect real deepfakes.
-> Use a real dataset for a production-quality classifier.
+```bash
+python train.py
+```
 
-### 2. Train the model
+The default command above trains the hybrid CNN+FFT model on the `dataset/` folder with sensible defaults (128×128, 20 epochs, batch size 32, augmentation enabled).
 
-Run `train.py` from the **project root directory**:
+#### More options
 
 ```bash
 # EfficientNet hybrid (recommended — highest accuracy)
@@ -168,6 +178,9 @@ python train.py --dataset_dir dataset --model_type hybrid --epochs 20
 
 # CNN-only model (fastest, lower accuracy)
 python train.py --dataset_dir dataset --model_type cnn --epochs 20
+
+# Adjust decision threshold at evaluation time (default 0.5)
+python train.py --threshold 0.4
 ```
 
 <details>
@@ -184,6 +197,7 @@ python train.py --dataset_dir dataset --model_type cnn --epochs 20
 | `--no_augment` | — | Disable data augmentation |
 | `--fine_tune` | — | Enable EfficientNet backbone fine-tuning (phase 2) |
 | `--fine_tune_epochs` | `10` | Additional fine-tuning epochs |
+| `--threshold` | `0.5` | Decision threshold for binary classification |
 
 </details>
 
@@ -197,31 +211,16 @@ After training, the following artefacts appear in `models/`:
 | `training_history.png` | Accuracy & loss curves |
 | `confusion_matrix.png` | Confusion matrix on the validation set |
 
-### 3. Launch the web app
+---
+
+## 🔍 How to Predict
 
 ```bash
-streamlit run app/streamlit_app.py
+python predict.py --image path/to/image.jpg --model models/best_hybrid_model.keras
 ```
 
-Navigate to `http://localhost:8501` in your browser.
+#### Batch prediction (entire directory)
 
-> **Important:** Run this command from the **project root directory** so that the default
-> model path (`models/best_hybrid_model.keras`) resolves correctly.
->
-> For the EfficientNet model, set the **Model path** sidebar field to
-> `models/best_efficientnet_model.keras` and **Model type** to `efficientnet`.
-
-### 4. Predict from the CLI
-
-**Single image:**
-```bash
-python predict.py \
-  --model models/best_efficientnet_model.keras \
-  --model_type efficientnet \
-  --image path/to/image.jpg
-```
-
-**Batch (entire directory):**
 ```bash
 python predict.py \
   --model models/best_hybrid_model.keras \
@@ -229,15 +228,91 @@ python predict.py \
   --output_dir predictions/
 ```
 
-**Using the unified CLI:**
+#### Using the EfficientNet model
+
 ```bash
-python main.py train  --dataset_dir dataset --model_type efficientnet --epochs 20 --fine_tune
-python main.py predict --model models/best_efficientnet_model.keras --model_type efficientnet --image test.jpg
+python predict.py \
+  --model models/best_efficientnet_model.keras \
+  --model_type efficientnet \
+  --image path/to/image.jpg
+```
+
+#### All prediction flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--model` | *(required)* | Path to saved Keras model |
+| `--model_type` | `hybrid` | `efficientnet`, `hybrid`, or `cnn` |
+| `--image` | — | Single image path |
+| `--input_dir` | — | Directory for batch prediction |
+| `--output_dir` | `predictions` | Where to save Grad-CAM heatmaps |
+| `--image_size` | `128` | Must match training size |
+| `--threshold` | `0.5` | Adjustable decision threshold |
+| `--no_gradcam` | — | Skip Grad-CAM heatmap generation |
+
+---
+
+## 📊 Sample Output
+
+```
+═══════════════════════════════════════════════════════
+  Image      : test_face.jpg
+  Prediction : Fake
+  Confidence : 94.32%
+  Raw Prob.  : 0.9432
+───────────────────────────────────────────────────────
+  Has EXIF   : False
+  Camera     : None
+  Software   : None
+  Meta Score : 0.50
+═══════════════════════════════════════════════════════
 ```
 
 ---
 
+## 📈 Performance Metrics
+
+After training, the script prints class distribution, predictions distribution, and a full classification report:
+
+```
+──────────────────────────────────────────────────
+  Class distribution (training set):
+    Real (0) :    800  (50.0%)
+    Fake (1) :    800  (50.0%)
+    Total    :   1600
+──────────────────────────────────────────────────
+
+  Predictions distribution (validation set):
+    Predicted Real (0) :    192
+    Predicted Fake (1) :    208
+    Threshold used     :    0.5
+──────────────────────────────────────────────────
+
+  Validation Accuracy : 0.9250
+  Weighted F1-Score   : 0.9248
+──────────────────────────────────────────────────
+
+              precision    recall  f1-score   support
+
+        Real       0.93      0.92      0.92       200
+        Fake       0.92      0.93      0.93       200
+
+    accuracy                           0.93       400
+   macro avg       0.93      0.93      0.93       400
+weighted avg       0.93      0.93      0.93       400
+```
+
+Training curves and a confusion matrix PNG are automatically saved to the `models/` directory.
+
+---
+
 ## 🌐 Streamlit Web Interface
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Navigate to `http://localhost:8501` in your browser.
 
 | Panel | Description |
 |---|---|
@@ -246,70 +321,14 @@ python main.py predict --model models/best_efficientnet_model.keras --model_type
 | **Grad-CAM** | Three-panel heatmap: original / heatmap / overlay |
 | **EXIF Metadata** | Camera, software, creation date, manipulation score |
 
-Use the sidebar to configure:
-- **Model path** — relative (e.g. `models/best_efficientnet_model.keras`) or absolute path to a `.keras` / `.h5` file
-- **Model type** — `efficientnet`, `hybrid`, or `cnn` (must match how the model was trained)
-- **Image size** — resolution the model was trained on (128 or 224)
-- **Decision threshold** — probability above which an image is labelled Fake
-- **Show Grad-CAM / EXIF** toggles
-
 ---
 
-## 🛠 Troubleshooting
+## 🔥 Grad-CAM Explainability
 
-### ⚠️ "Model not found" warning in the web app
+Grad-CAM highlights the image regions responsible for the prediction:
 
-This warning appears when no trained model exists at the configured path.
-The app now shows a built-in step-by-step guide to fix this.
-
-**Manual fix:**
-1. Train a model first (see [Step 2](#2-train-the-model) above).
-2. Launch the app from the **project root** so the relative path resolves:
-   ```bash
-   # run from the deepfake-image-detection/ directory
-   streamlit run app/streamlit_app.py
-   ```
-3. If your model lives elsewhere, type the correct path (absolute paths work too)
-   in the **Model path** sidebar field.
-
-### Windows path separators
-
-Windows users can use either forward slashes or backslashes in the **Model path** field:
-
-```
-models/best_efficientnet_model.keras    ✅  works on all platforms
-models\best_efficientnet_model.keras    ✅  also works on Windows
-C:\Users\you\models\my_model.keras      ✅  absolute path
-```
-
-### Training fails with "No supported images found"
-
-Make sure both `dataset/real/` and `dataset/fake/` contain image files.  
-Run the synthetic-data helper if you need test images quickly:
-
-```bash
-python scripts/create_sample_dataset.py
-```
-
-### `ModuleNotFoundError` when importing project modules
-
-Always run scripts from the **project root**:
-
-```bash
-# ✅ correct
-python train.py
-
-# ❌ wrong — imports will fail
-cd app
-python streamlit_app.py
-```
-
-### Out-of-memory errors during training
-
-Reduce the batch size or image size:
-```bash
-python train.py --batch_size 8 --image_size 128
-```
+- **Red / yellow** areas → high influence on the _Fake_ decision
+- **Blue / purple** areas → low influence
 
 ---
 
@@ -351,49 +370,43 @@ Spatial branch (H×W×3)                FFT branch (H×W×1)
                                        Dense(1, sigmoid)
 ```
 
-The **EfficientNet Hybrid** model combines:
-- **Transfer learning**: EfficientNetB0 pretrained on ImageNet provides rich visual features even with small datasets.
-- **FFT frequency features**: Detects GAN/diffusion-model artifacts in the frequency domain that are invisible to the human eye.
-- **SE Attention**: Squeeze-and-Excitation block learns which fused feature channels are most informative per sample.
-- **Two-phase training**: Train only the head first (fast convergence), then fine-tune the whole network at a lower learning rate.
-- **Label smoothing**: Prevents overconfident predictions and improves generalisation to unseen test images.
+---
+
+## 🚀 Future Improvements
+
+- [ ] Add MobileNetV3 / EfficientNetV2 backbone options for even faster inference
+- [ ] Video deepfake detection (frame-level + temporal fusion)
+- [ ] Online hard example mining (OHEM) for better handling of difficult samples
+- [ ] Quantization & TFLite export for edge/mobile deployment
+- [ ] REST API endpoint (`FastAPI`) for production serving
+- [ ] Ensemble of EfficientNet + ViT (Vision Transformer) predictions
+- [ ] Active learning loop to continuously improve with user-labelled corrections
 
 ---
 
-## 🔥 Grad-CAM Explainability
+## 🛠 Troubleshooting
 
-Grad-CAM highlights the image regions responsible for the prediction:
+### ⚠️ "Model not found" warning in the web app
 
-- **Red / yellow** areas → high influence on the _Fake_ decision
-- **Blue / purple** areas → low influence
+Train a model first, then launch Streamlit from the **project root**:
+```bash
+python train.py
+streamlit run app/streamlit_app.py
+```
 
-The heatmap is computed from the last Conv2D layer of the spatial branch and overlaid on the original image with 40 % transparency.
+### Training fails with "No supported images found"
 
----
+Make sure both `dataset/real/` and `dataset/fake/` contain image files:
+```bash
+python scripts/create_sample_dataset.py
+```
 
-## 🧾 EXIF Metadata Scoring
+### Out-of-memory errors during training
 
-The `MetadataAnalyzer` class computes a heuristic **manipulation score** (0 – 1):
-
-| Condition | Score added |
-|---|---|
-| No EXIF data at all | +0.30 |
-| Editing software detected (Photoshop, GIMP, etc.) | +0.30 |
-| No camera make / model | +0.20 |
-| No creation date | +0.20 |
-
----
-
-## 📊 Evaluation Metrics
-
-After training, the script prints:
-- Accuracy, Precision, Recall, F1-score (per class)
-- Confusion matrix (saved as PNG)
-- Training vs. validation accuracy / loss curves (saved as PNG)
-
-Training is monitored on **validation AUC** (area under the ROC curve) rather than just
-accuracy — AUC is a more robust metric for imbalanced datasets and correlates better with
-real-world detection performance.
+Reduce the batch size or image size:
+```bash
+python train.py --batch_size 8 --image_size 128
+```
 
 ---
 
@@ -417,12 +430,6 @@ pip install -r requirements.txt
 
 ---
 
-## 🗒 Notebooks
-
-The `notebooks/` directory is reserved for exploratory Jupyter notebooks (EDA, prototype models, visualisations).
-
----
-
 ## 🤝 Contributing
 
 1. Fork the repository
@@ -436,3 +443,4 @@ The `notebooks/` directory is reserved for exploratory Jupyter notebooks (EDA, p
 ## 📄 License
 
 This project is released under the MIT License.
+
